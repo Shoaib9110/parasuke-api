@@ -29,23 +29,25 @@ func main() {
 	app := pocketbase.New()
 
 	app.OnBeforeServe().Add(func(e *core.ServeEvent) error {
-		e.Router.GET("/api/parasuke/user/:id", // TODO: change path name as expected
+		e.Router.GET("/api/parasuke/user",
 			func(c echo.Context) error {
-				id := c.PathParam("id")
-				record, err := app.Dao().FindRecordById("users", id) // TODO: change table name as expected
-				if err != nil {
-					return apis.NewNotFoundError("The article does not exist.", err)
+				jwtToken := c.Request().Header["Authorization"]
+				if len(jwtToken) == 0 || jwtToken[0] == "" {
+					return apis.NewNotFoundError("JWT_TOKEN is required", "JWT_TOKEN not found")
 				}
 
-				expiry, err := time.Parse("2006-01-02", record.GetString("Expiry"))
+				user, err := app.Dao().FindAuthRecordByToken(jwtToken[0], app.Settings().RecordAuthToken.Secret)
 				if err != nil {
-					return apis.NewNotFoundError("unable to Parse token Expiry Date", err)
+					return apis.NewNotFoundError("The user record does not exist.", err)
 				}
+
+				now := time.Now()
+				expiry := now.AddDate(0, 0, 15)
 
 				token := &Oauth2Token{
-					AccessToken:  record.GetString("AccessToken"),
+					AccessToken:  user.GetString("googleAccessToken"),
 					TokenType:    "Bearer",
-					RefreshToken: record.GetString("RefreshToken"),
+					RefreshToken: user.GetString("googleRefreshToken"),
 					Expiry:       expiry,
 				}
 
@@ -55,7 +57,7 @@ func main() {
 
 				}
 
-				config, err := google.ConfigFromJSON(b, calendar.CalendarReadonlyScope)
+				config, err := google.ConfigFromJSON(b, calendar.CalendarScope)
 				if err != nil {
 					return apis.NewNotFoundError("Unable to parse client secret file to config", err)
 				}
@@ -79,23 +81,12 @@ func main() {
 					fmt.Println("No upcoming events found.")
 					return apis.NewNotFoundError("No upcoming events found.", err)
 
-				} else {
-					// TODO: events.Items in record
-					for _, item := range events.Items {
-						date := item.Start.DateTime
-						if date == "" {
-							date = item.Start.Date
-						}
-						fmt.Printf("%v (%v)\n", item.Summary, date)
-					}
 				}
 
-				// TODO:  Return events Items field as expected using this
-				apis.EnrichRecord(c, app.Dao(), record)
-
-				return c.JSON(http.StatusOK, record)
+				return c.JSON(http.StatusOK, events)
 			},
 			apis.ActivityLogger(app),
+			apis.RequireSameContextRecordAuth(), // TODO: set your required middleware
 		)
 
 		return nil
